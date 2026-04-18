@@ -22,3 +22,5 @@ lambda/**/*.zip
 # OS
 .DS_Store
 Thumbs.db
+
+data_generator/output/
