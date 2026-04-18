@@ -23,4 +23,9 @@ lambda/**/*.zip
 .DS_Store
 Thumbs.db
 
+# Generated data
+data_generator/output/
+
+# AWS
 *.pem
+load_env.ps1
