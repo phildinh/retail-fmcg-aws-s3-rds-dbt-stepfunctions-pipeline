@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(pip3:*)",
+      "Bash(python3:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(dbt:*)",
+      "Bash(pytest:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(echo:*)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(rm -rf:*)",
+      "Bash(aws:*)"
+    ]
+  }
+}
