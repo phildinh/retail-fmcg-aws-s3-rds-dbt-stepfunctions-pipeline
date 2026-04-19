@@ -277,7 +277,7 @@ def save_csv(df: pd.DataFrame, filename: str) -> str:
     filepath = os.path.join(OUTPUT_DIR, filename)
     try:
         df.to_csv(filepath, index=False)
-        print(f"  Saved {len(df)} rows → {filepath}")
+        print(f"  Saved {len(df)} rows -> {filepath}")
         return filepath
     except Exception as e:
         raise RuntimeError(
