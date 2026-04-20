@@ -29,3 +29,5 @@ data_generator/output/
 # AWS
 *.pem
 load_env.ps1
+
+infrastructure/packages/
