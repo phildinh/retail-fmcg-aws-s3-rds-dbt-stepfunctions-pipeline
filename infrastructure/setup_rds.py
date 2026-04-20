@@ -18,7 +18,7 @@ def create_staging_tables():
     print("Creating staging tables...")
 
     execute_query("""
-        CREATE TABLE IF NOT EXISTS staging.stg_products (
+        CREATE TABLE IF NOT EXISTS staging.raw_products (
             product_id    VARCHAR(20),
             product_name  VARCHAR(100),
             category      VARCHAR(50),
@@ -31,7 +31,7 @@ def create_staging_tables():
     """)
 
     execute_query("""
-        CREATE TABLE IF NOT EXISTS staging.stg_stores (
+        CREATE TABLE IF NOT EXISTS staging.raw_stores (
             store_id    VARCHAR(20),
             store_name  VARCHAR(100),
             state       VARCHAR(10),
@@ -43,7 +43,7 @@ def create_staging_tables():
     """)
 
     execute_query("""
-        CREATE TABLE IF NOT EXISTS staging.stg_customers (
+        CREATE TABLE IF NOT EXISTS staging.raw_customers (
             customer_id   VARCHAR(20),
             age_group     VARCHAR(10),
             loyalty_tier  VARCHAR(20),
@@ -53,7 +53,7 @@ def create_staging_tables():
     """)
 
     execute_query("""
-        CREATE TABLE IF NOT EXISTS staging.stg_sales (
+        CREATE TABLE IF NOT EXISTS staging.raw_sales (
             transaction_id    VARCHAR(30),
             transaction_date  DATE,
             product_id        VARCHAR(20),

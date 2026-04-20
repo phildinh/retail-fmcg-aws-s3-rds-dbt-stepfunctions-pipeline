@@ -57,7 +57,7 @@ def load_products(rows: list, run_timestamp: str):
     Delete by run_timestamp ensures retries are safe.
     """
     execute_query(
-        "DELETE FROM staging.stg_products WHERE loaded_at::text LIKE %s",
+        "DELETE FROM staging.raw_products WHERE loaded_at::text LIKE %s",
         (f"{run_timestamp[:10]}%",)
     )
 
@@ -69,12 +69,12 @@ def load_products(rows: list, run_timestamp: str):
     ) for r in rows]
 
     execute_many("""
-        INSERT INTO staging.stg_products
+        INSERT INTO staging.raw_products
             (product_id, product_name, category, brand,
              supplier, unit_cost, unit_price, loaded_at)
         VALUES %s
     """, records)
-    print(f"  stg_products: {len(records)} rows loaded")
+    print(f"  raw_products: {len(records)} rows loaded")
     return len(records)
 
 
@@ -83,7 +83,7 @@ def load_stores(rows: list, run_timestamp: str):
     Load stores into staging — idempotent delete then insert.
     """
     execute_query(
-        "DELETE FROM staging.stg_stores WHERE loaded_at::text LIKE %s",
+        "DELETE FROM staging.raw_stores WHERE loaded_at::text LIKE %s",
         (f"{run_timestamp[:10]}%",)
     )
 
@@ -94,12 +94,12 @@ def load_stores(rows: list, run_timestamp: str):
     ) for r in rows]
 
     execute_many("""
-        INSERT INTO staging.stg_stores
+        INSERT INTO staging.raw_stores
             (store_id, store_name, state, region,
              store_type, city, loaded_at)
         VALUES %s
     """, records)
-    print(f"  stg_stores: {len(records)} rows loaded")
+    print(f"  raw_stores: {len(records)} rows loaded")
     return len(records)
 
 
@@ -108,7 +108,7 @@ def load_customers(rows: list, run_timestamp: str):
     Load customers into staging — idempotent delete then insert.
     """
     execute_query(
-        "DELETE FROM staging.stg_customers "
+        "DELETE FROM staging.raw_customers "
         "WHERE loaded_at::text LIKE %s",
         (f"{run_timestamp[:10]}%",)
     )
@@ -120,12 +120,12 @@ def load_customers(rows: list, run_timestamp: str):
     ) for r in rows]
 
     execute_many("""
-        INSERT INTO staging.stg_customers
+        INSERT INTO staging.raw_customers
             (customer_id, age_group, loyalty_tier,
              state, loaded_at)
         VALUES %s
     """, records)
-    print(f"  stg_customers: {len(records)} rows loaded")
+    print(f"  raw_customers: {len(records)} rows loaded")
     return len(records)
 
 
@@ -136,7 +136,7 @@ def load_fact_sales(rows: list, run_timestamp: str):
     incremental model can correctly identify new rows.
     """
     execute_query(
-        "DELETE FROM staging.stg_sales WHERE created_at = %s",
+        "DELETE FROM staging.raw_sales WHERE created_at = %s",
         (run_timestamp,)
     )
 
@@ -154,13 +154,13 @@ def load_fact_sales(rows: list, run_timestamp: str):
     ) for r in rows]
 
     execute_many("""
-        INSERT INTO staging.stg_sales
+        INSERT INTO staging.raw_sales
             (transaction_id, transaction_date, product_id,
              store_id, customer_id, quantity, unit_price,
              discount_pct, total_amount, created_at)
         VALUES %s
     """, records)
-    print(f"  stg_sales: {len(records)} rows loaded")
+    print(f"  raw_sales: {len(records)} rows loaded")
     return len(records)
 
 

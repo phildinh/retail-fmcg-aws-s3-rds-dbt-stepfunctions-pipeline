@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: staging
+    schema: staging
+    tables:
+      - name: raw_products
+      - name: raw_stores
+      - name: raw_customers
+      - name: raw_sales
