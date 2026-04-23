@@ -1,0 +1,129 @@
+{
+  "Comment": "Retail FMCG daily pipeline - generates data, loads to RDS, runs dbt",
+  "StartAt": "GenerateAndUpload",
+  "States": {
+
+    "GenerateAndUpload": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "retail-fmcg-lambda-1-generator",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.lambda1_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "LoadToStaging"
+    },
+
+    "LoadToStaging": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "retail-fmcg-lambda-2-staging",
+        "Payload.$": "$.lambda1_result.Payload"
+      },
+      "ResultPath": "$.lambda2_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "RunDbt"
+    },
+
+    "RunDbt": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:sendCommand",
+      "Parameters": {
+        "DocumentName": "AWS-RunShellScript",
+        "InstanceIds": ["i-0d5a310331e078521"],
+        "Parameters": {
+          "commands": [
+            "cd /home/ec2-user/dbt/fmcg_pipeline",
+            "export DB_HOST=$(aws ssm get-parameter --name /fmcg/db_host --query Parameter.Value --output text)",
+            "export DB_USER=$(aws ssm get-parameter --name /fmcg/db_user --query Parameter.Value --output text)",
+            "export DB_PASSWORD=$(aws ssm get-parameter --name /fmcg/db_password --query Parameter.Value --output text)",
+            "dbt snapshot --profiles-dir /home/ec2-user/.dbt",
+            "dbt run --select staging --profiles-dir /home/ec2-user/.dbt",
+            "dbt run --select gold --profiles-dir /home/ec2-user/.dbt",
+            "dbt test --profiles-dir /home/ec2-user/.dbt"
+          ]
+        }
+      },
+      "ResultPath": "$.dbt_result",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 1,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "NotifySuccess"
+    },
+
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-southeast-2:819404925252:retail-fmcg-pipeline-alerts",
+        "Subject": "FMCG Pipeline - Success",
+        "Message.$": "States.Format('Pipeline completed successfully for {}. Rows loaded: {}', $.lambda1_result.Payload.run_date, $.lambda2_result.Payload.rows_loaded)"
+      },
+      "Next": "PipelineComplete"
+    },
+
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:ap-southeast-2:819404925252:retail-fmcg-pipeline-alerts",
+        "Subject": "FMCG Pipeline - FAILED",
+        "Message.$": "States.Format('Pipeline failed. Error: {}', States.JsonToString($.error))"
+      },
+      "Next": "PipelineFailed"
+    },
+
+    "PipelineComplete": {
+      "Type": "Succeed"
+    },
+
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineFailed",
+      "Cause": "One or more pipeline steps failed"
+    }
+
+  }
+}

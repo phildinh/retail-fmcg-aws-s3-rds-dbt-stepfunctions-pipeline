@@ -12,7 +12,6 @@ def get_config() -> dict:
     Raises clearly if a required variable is missing.
     """
     required = [
-        "AWS_REGION",
         "S3_BUCKET",
         "DB_HOST",
         "DB_NAME",
