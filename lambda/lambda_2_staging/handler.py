@@ -2,16 +2,14 @@ import sys
 import os
 import json
 import csv
-import boto3
 import io
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ))
 
 from utils.config import get_config
-from utils.db import execute_query, execute_many, get_connection
+from utils.db import execute_query, execute_many
 from utils.logger import log_run_start, log_run_success, log_run_failure
 from utils.s3 import get_s3_client
 

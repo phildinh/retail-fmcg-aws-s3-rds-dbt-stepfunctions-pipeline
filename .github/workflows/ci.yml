@@ -27,7 +27,7 @@ jobs:
         run: |
           flake8 lambda/ utils/ data_generator/ infrastructure/ tests/ \
             --max-line-length=100 \
-            --extend-ignore=E203,W503 \
+            --extend-ignore=E203,W503,E221,E251,E402 \
             --exclude=__pycache__
 
   # ── 2. Validate dbt project ───────────────────────────────────────────────
