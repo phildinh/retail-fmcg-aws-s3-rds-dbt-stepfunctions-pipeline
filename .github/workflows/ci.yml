@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  # ── 1. Lint Python ────────────────────────────────────────────────────────
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install flake8
+        run: pip install flake8 --quiet
+
+      - name: Run flake8
+        run: |
+          flake8 lambda/ utils/ data_generator/ infrastructure/ tests/ \
+            --max-line-length=100 \
+            --extend-ignore=E203,W503 \
+            --exclude=__pycache__
+
+  # ── 2. Validate dbt project ───────────────────────────────────────────────
+  dbt-parse:
+    name: Validate dbt
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dbt-postgres
+        run: pip install dbt-postgres==1.9.1 --quiet
+
+      - name: Create dummy profiles.yml
+        # dbt parse validates project structure without connecting to the DB.
+        # A profiles.yml must exist so dbt knows the adapter type.
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << 'EOF'
+          fmcg_pipeline:
+            target: dev
+            outputs:
+              dev:
+                type: postgres
+                host: localhost
+                user: dummy
+                password: dummy
+                port: 5432
+                dbname: fmcg_db
+                schema: public
+          EOF
+
+      - name: dbt parse
+        working-directory: dbt/fmcg_pipeline
+        run: dbt parse --profiles-dir ~/.dbt
+
+  # ── 3. Validate Step Functions JSON ──────────────────────────────────────
+  validate-stepfunctions:
+    name: Validate state machine JSON
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check JSON is valid
+        run: |
+          python -c "
+          import json, sys
+          with open('step_functions/state_machine.json') as f:
+              json.load(f)
+          print('state_machine.json is valid JSON')
+          "
