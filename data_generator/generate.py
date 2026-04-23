@@ -312,7 +312,7 @@ def main(run_date: str = None, run_timestamp: str = None) -> dict:
     # ── Validate early ────────────────────────────────────
     run_dt = validate_run_date(run_date)
 
-    print(f"Starting data generation")
+    print("Starting data generation")
     print(f"  Run date:      {run_date}")
     print(f"  Run timestamp: {run_timestamp}")
     print(f"  Transactions:  {NUM_TRANSACTIONS}")

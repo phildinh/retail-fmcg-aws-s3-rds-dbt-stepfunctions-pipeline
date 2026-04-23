@@ -1,0 +1,73 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+
+  # ── 1. Deploy Lambda functions ────────────────────────────────────────────
+  deploy-lambdas:
+    name: Deploy Lambdas
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deploy dependencies
+        run: pip install boto3 python-dotenv --quiet
+
+      - name: Write .env file from GitHub secrets
+        run: |
+          cat > .env << EOF
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION=${{ secrets.AWS_REGION }}
+          S3_BUCKET=${{ secrets.S3_BUCKET }}
+          DB_HOST=${{ secrets.DB_HOST }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          DB_PORT=${{ secrets.DB_PORT }}
+          SNS_TOPIC_ARN=${{ secrets.SNS_TOPIC_ARN }}
+          NUM_TRANSACTIONS=${{ secrets.NUM_TRANSACTIONS }}
+          PIPELINE_ENV=${{ secrets.PIPELINE_ENV }}
+          OUTPUT_DIR=/tmp/output
+          EOF
+
+      - name: Deploy both Lambdas
+        run: python infrastructure/deploy_lambdas.py
+
+  # ── 2. Sync dbt to EC2 ────────────────────────────────────────────────────
+  sync-dbt:
+    name: Sync dbt to EC2
+    runs-on: ubuntu-latest
+    needs: deploy-lambdas
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key.pem
+          chmod 600 ~/.ssh/ec2_key.pem
+          # Suppress host key prompt for the EC2 host
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync dbt models, snapshots, macros and project file
+        run: |
+          SCP="scp -i ~/.ssh/ec2_key.pem -o StrictHostKeyChecking=no"
+          EC2="ec2-user@${{ secrets.EC2_HOST }}"
+          DBT_PATH="/home/ec2-user/dbt/fmcg_pipeline"
+
+          $SCP -r dbt/fmcg_pipeline/models     $EC2:$DBT_PATH/
+          $SCP -r dbt/fmcg_pipeline/snapshots  $EC2:$DBT_PATH/
+          $SCP -r dbt/fmcg_pipeline/macros     $EC2:$DBT_PATH/
+          $SCP    dbt/fmcg_pipeline/dbt_project.yml $EC2:$DBT_PATH/
+
+          echo "dbt sync complete"

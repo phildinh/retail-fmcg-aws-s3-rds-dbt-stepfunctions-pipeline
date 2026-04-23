@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))
 ))
 
+
 def load_handler(relative_path):
     abs_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -43,7 +44,7 @@ def test_lambda_2_local():
     assert result["status"] == "success"
     assert result["rows_loaded"] > 0
     assert "run_id" in result
-    print(f"\nAll assertions passed!")
+    print("\nAll assertions passed!")
     print(f"Rows loaded: {result['rows_loaded']}")
     print(f"Run ID: {result['run_id']}")
 
