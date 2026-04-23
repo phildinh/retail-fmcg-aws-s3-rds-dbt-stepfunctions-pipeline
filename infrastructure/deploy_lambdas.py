@@ -2,34 +2,73 @@ import boto3
 import zipfile
 import os
 import sys
+import subprocess
+import tempfile
 sys.path.insert(0, os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))
 ))
 from utils.config import get_config
 
 
-def create_zip(source_dirs: list, zip_path: str):
+def install_dependencies(requirements_path: str, target_dir: str):
+    """
+    Install Lambda-specific pip dependencies into target_dir so they
+    get bundled into the zip. Uses manylinux platform flag to ensure
+    compiled packages (e.g. psycopg2) are built for Amazon Linux,
+    not the local OS.
+    """
+    subprocess.run([
+        sys.executable, "-m", "pip", "install",
+        "-r", requirements_path,
+        "-t", target_dir,
+        "--platform", "manylinux2014_x86_64",
+        "--only-binary=:all:",
+        "--quiet"
+    ], check=True)
+    print(f"  Installed dependencies from {requirements_path}")
+
+
+def create_zip(source_dirs: list, zip_path: str,
+               requirements_path: str = None):
     """
     Package Lambda function code and dependencies into a zip file.
-    Includes the handler, utils, and data_generator folders.
+    If requirements_path is provided, pip-installs those deps into
+    the zip so Lambda has everything it needs at runtime.
     """
-    with zipfile.ZipFile(zip_path, 'w',
-                         zipfile.ZIP_DEFLATED) as zf:
-        for source_dir, prefix in source_dirs:
-            for root, dirs, files in os.walk(source_dir):
-                # Skip cache and output folders
-                dirs[:] = [d for d in dirs
-                           if d not in ['__pycache__',
-                                        'output', '.git']]
-                for file in files:
-                    if file.endswith('.pyc'):
-                        continue
-                    filepath = os.path.join(root, file)
-                    arcname  = os.path.join(
-                        prefix,
-                        os.path.relpath(filepath, source_dir)
-                    )
-                    zf.write(filepath, arcname)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        if requirements_path:
+            install_dependencies(requirements_path, tmp_dir)
+
+        with zipfile.ZipFile(zip_path, 'w',
+                             zipfile.ZIP_DEFLATED) as zf:
+            # Bundle pip-installed dependencies
+            if requirements_path:
+                for root, dirs, files in os.walk(tmp_dir):
+                    dirs[:] = [d for d in dirs
+                               if d not in ['__pycache__']]
+                    for file in files:
+                        if file.endswith('.pyc'):
+                            continue
+                        filepath = os.path.join(root, file)
+                        arcname  = os.path.relpath(filepath, tmp_dir)
+                        zf.write(filepath, arcname)
+
+            # Bundle source code
+            for source_dir, prefix in source_dirs:
+                for root, dirs, files in os.walk(source_dir):
+                    dirs[:] = [d for d in dirs
+                               if d not in ['__pycache__',
+                                            'output', '.git']]
+                    for file in files:
+                        if file.endswith(('.pyc', '.txt')):
+                            continue
+                        filepath = os.path.join(root, file)
+                        arcname  = os.path.join(
+                            prefix,
+                            os.path.relpath(filepath, source_dir)
+                        )
+                        zf.write(filepath, arcname)
+
     print(f"  Created zip: {zip_path}")
 
 
@@ -57,6 +96,11 @@ def deploy_lambda(function_name: str,
         client.update_function_code(
             FunctionName = function_name,
             ZipFile      = zip_bytes
+        )
+        # Wait for code update to finish before updating config —
+        # calling both back-to-back causes ResourceConflictException
+        client.get_waiter("function_updated").wait(
+            FunctionName = function_name
         )
         client.update_function_configuration(
             FunctionName  = function_name,
@@ -99,7 +143,6 @@ def main():
 
     # Environment variables passed to both Lambdas
     env_vars = {
-        "AWS_REGION":      config["aws_region"],
         "S3_BUCKET":       config["s3_bucket"],
         "DB_HOST":         config["db_host"],
         "DB_NAME":         config["db_name"],
@@ -122,7 +165,8 @@ def main():
             ("data_generator", "data_generator"),
             ("utils", "utils")
         ],
-        zip_path="infrastructure/packages/lambda_1.zip"
+        zip_path          = "infrastructure/packages/lambda_1.zip",
+        requirements_path = "lambda/lambda_1_generator/requirements.txt"
     )
     print("Deploying Lambda 1...")
     deploy_lambda(
@@ -139,10 +183,10 @@ def main():
     create_zip(
         source_dirs=[
             ("lambda/lambda_2_staging", ""),
-            ("data_generator", "data_generator"),
             ("utils", "utils")
         ],
-        zip_path="infrastructure/packages/lambda_2.zip"
+        zip_path          = "infrastructure/packages/lambda_2.zip",
+        requirements_path = "lambda/lambda_2_staging/requirements.txt"
     )
     print("Deploying Lambda 2...")
     deploy_lambda(
