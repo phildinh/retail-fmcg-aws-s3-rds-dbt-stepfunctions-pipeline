@@ -22,7 +22,7 @@ with staged as (
 
     {% if is_incremental() %}
         where created_at > (
-            select max(created_at)
+            select coalesce(max(created_at), '1900-01-01'::timestamp)
             from {{ this }}
         )
     {% endif %}

@@ -17,6 +17,6 @@ select
     supplier,
     unit_cost,
     unit_price
-from {{ ref('stg_products') }}
+from {{ source('staging', 'raw_products') }}
 
 {% endsnapshot %}

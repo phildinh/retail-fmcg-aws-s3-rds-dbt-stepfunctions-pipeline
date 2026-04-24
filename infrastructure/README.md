@@ -98,20 +98,26 @@ The state machine orchestrates the full daily pipeline. It is deployed manually 
 ### States
 
 ```
-GenerateAndUpload  →  LoadToStaging  →  RunDbt  →  NotifySuccess
-        ↓                   ↓              ↓
-   NotifyFailure       NotifyFailure  NotifyFailure
+GenerateAndUpload  →  LoadToStaging  →  RunDbt  →  WaitForDbt  →  CheckDbtStatus  →  IsDbtComplete
+        ↓                   ↓              ↓                               ↓                ↓
+   NotifyFailure       NotifyFailure  NotifyFailure               (retry loop)      Success → NotifySuccess
+                                                                                    Failed  → NotifyFailure
 ```
 
 | State | Type | What it does |
 |---|---|---|
 | `GenerateAndUpload` | Lambda | Invokes Lambda 1 — generates CSV and uploads to S3 |
 | `LoadToStaging` | Lambda | Invokes Lambda 2 — loads S3 CSV into `staging.raw_*` tables |
-| `RunDbt` | SSM SendCommand | SSHes into EC2 and runs dbt staging → snapshot → gold → test |
+| `RunDbt` | SSM SendCommand | Sends dbt commands to EC2 via SSM (fire-and-forget API call) |
+| `WaitForDbt` | Wait | Pauses 30 seconds between polls |
+| `CheckDbtStatus` | SSM GetCommandInvocation | Polls SSM to check if dbt finished |
+| `IsDbtComplete` | Choice | Routes on status: Success → notify, Failed/TimedOut/Cancelled → notify failure, else loop |
 | `NotifySuccess` | SNS | Publishes success email with run date and row count |
-| `NotifyFailure` | SNS | Publishes failure email with error details |
+| `NotifyFailure` | SNS | Publishes failure email with full state detail |
 | `PipelineComplete` | Succeed | Terminal success state |
 | `PipelineFailed` | Fail | Terminal failure state |
+
+> `RunDbt` uses `sendCommand` which returns immediately when SSM accepts the command. The `WaitForDbt → CheckDbtStatus → IsDbtComplete` polling loop is what actually waits for dbt to finish before sending the success notification.
 
 ### Data flow between states
 
@@ -123,20 +129,27 @@ Lambda 1's full output is stored at `$.lambda1_result.Payload` and passed direct
 |---|---|---|---|
 | Lambda 1 | 2 | 30s | 2× |
 | Lambda 2 | 2 | 30s | 2× |
-| dbt (SSM) | 1 | 60s | 2× |
+| dbt (SSM) | 0 | — | — |
 
 ### dbt run order inside SSM
 
 The `RunDbt` state sends these commands to EC2 in sequence:
 
 ```bash
-dbt snapshot --profiles-dir /home/ec2-user/.dbt   # SCD Type 2
-dbt run --select staging                           # build stg_* views
-dbt run --select gold                              # build fact + dim tables
-dbt test                                           # validate data quality
+export PATH=/home/ec2-user/.local/bin:$PATH
+export PYTHONPATH=/home/ec2-user/.local/lib/python3.9/site-packages:$PYTHONPATH
+export DB_HOST=$(aws ssm get-parameter --name /fmcg/db_host --with-decryption ...)
+export DB_USER=$(aws ssm get-parameter --name /fmcg/db_user --with-decryption ...)
+export DB_PASSWORD=$(aws ssm get-parameter --name /fmcg/db_password --with-decryption ...)
+dbt run --select staging   # build stg_* views
+dbt snapshot               # SCD Type 2 on products and stores
+dbt run --select gold      # build fact + dim tables
+dbt test                   # validate data quality
 ```
 
-> Note: `dbt snapshot` runs before staging because snapshots read from `stg_*` views via `ref()` — if staging views don't exist yet, snapshot fails. The correct order is: snapshot first, then staging, then gold.
+**Why `PATH` and `PYTHONPATH`:** SSM runs as `root` and doesn't load the `ec2-user` profile. dbt is installed under `ec2-user`'s local Python packages, so both variables must be set explicitly.
+
+**Why `--with-decryption`:** SSM parameters are stored as `SecureString` (KMS encrypted). Without this flag, the raw ciphertext is returned instead of the actual value.
 
 ### EC2 instance
 
@@ -144,13 +157,15 @@ The SSM command targets instance `i-0d5a310331e078521`. If the EC2 instance is r
 
 ### DB credentials in SSM Parameter Store
 
-The `RunDbt` state pulls RDS credentials from SSM Parameter Store at runtime — they are never hardcoded in the state machine:
+The `RunDbt` state pulls RDS credentials from SSM Parameter Store at runtime — they are never hardcoded in the state machine. All three are stored as `SecureString` (KMS encrypted):
 
 | Parameter | Used for |
 |---|---|
 | `/fmcg/db_host` | RDS endpoint |
 | `/fmcg/db_user` | RDS username |
 | `/fmcg/db_password` | RDS password |
+
+To update a parameter: **Systems Manager → Parameter Store → select parameter → Edit → update Value**.
 
 ---
 

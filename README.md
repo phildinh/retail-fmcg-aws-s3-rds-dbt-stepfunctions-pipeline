@@ -1,10 +1,10 @@
-# 🛒 Retail FMCG AWS Data Pipeline
+# Retail FMCG AWS Data Pipeline
 
-> A production-grade, fully automated cloud data pipeline built on AWS — migrating a local FMCG retail pipeline to a scalable, serverless architecture with daily automated runs, SCD Type 2 history tracking, and Power BI reporting.
+> A production-grade, fully automated cloud data pipeline built on AWS — migrating a local FMCG retail pipeline to a scalable, serverless architecture with daily automated runs, SCD Type 2 history tracking, CI/CD, and Power BI reporting.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Business Problem](#business-problem)
 - [Architecture](#architecture)
@@ -14,16 +14,19 @@
 - [Database Design](#database-design)
 - [Data Engineering Patterns](#data-engineering-patterns)
 - [Synthetic Dataset](#synthetic-dataset)
+- [CI/CD](#cicd)
 - [Project Structure](#project-structure)
 - [Setup Guide](#setup-guide)
 - [Pipeline Execution](#pipeline-execution)
+- [Pipeline in Action](#pipeline-in-action)
 - [Monitoring and Alerting](#monitoring-and-alerting)
 - [Cost Estimate](#cost-estimate)
+- [Production Considerations](#production-considerations)
 - [Key Learnings](#key-learnings)
 
 ---
 
-## 🎯 Business Problem
+## Business Problem
 
 A small FMCG distributor runs their entire data pipeline on a local machine. When the data engineer leaves, the pipeline stops. Stakeholders lose access to daily sales reports. The Power BI dashboard goes stale.
 
@@ -36,7 +39,7 @@ A small FMCG distributor runs their entire data pipeline on a local machine. Whe
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -59,8 +62,9 @@ A small FMCG distributor runs their entire data pipeline on a local machine. Whe
 │                     │                      │               │   │
 │                     │  ┌───────────────────▼─────────┐     │   │
 │                     │  │    EC2 (dbt Core)            │     │   │
+│                     │  │  dbt run staging (views)    │     │   │
 │                     │  │  dbt snapshot (SCD Type 2)  │     │   │
-│                     │  │  dbt run (incremental)      │     │   │
+│                     │  │  dbt run gold (incremental) │     │   │
 │                     │  │  dbt test (data quality)    │     │   │
 │                     │  └───────────────────┬─────────┘     │   │
 │                     │                      │               │   │
@@ -79,7 +83,7 @@ A small FMCG distributor runs their entire data pipeline on a local machine. Whe
 
 ---
 
-## ☁️ AWS Services
+## AWS Services
 
 | Service | Purpose | Why Chosen |
 |---|---|---|
@@ -88,30 +92,33 @@ A small FMCG distributor runs their entire data pipeline on a local machine. Whe
 | **Lambda (×2)** | Serverless Python compute | Pay per invocation, no server management |
 | **S3** | Raw CSV landing zone (Bronze layer) | Durable, cheap, partitioned by date |
 | **RDS PostgreSQL** | Cloud data warehouse | Managed, always-on, team accessible |
-| **EC2 (t2.micro)** | Runs dbt Core | Persistent environment needed for dbt |
+| **EC2 (t3.micro)** | Runs dbt Core | Persistent environment needed for dbt |
 | **SSM** | Remote command execution on EC2 | Secure, no open ports needed |
 | **SNS** | Email alerts on success/failure | Instant observability |
 | **CloudWatch** | Centralised logging | Automatic, zero config |
 | **IAM** | Roles and permissions | Least privilege per service |
 
+![AWS Console showing all services in use](docs/screenshots/aws_console_home.png)
+
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Python | 3.11 | Lambda functions and data generator |
-| boto3 | Latest | AWS SDK for S3, Lambda, SNS |
+| Python | 3.9 | Lambda functions and data generator |
+| boto3 | 1.34.x | AWS SDK for S3, Lambda, SNS |
 | Faker | 24.x | Synthetic FMCG data generation |
 | psycopg2-binary | 2.9.x | PostgreSQL connection from Python |
 | pandas | 2.x | Data manipulation in generator |
 | dbt Core | 1.10.x | SQL transformations and snapshots |
 | dbt-postgres | 1.9.x | dbt adapter for RDS PostgreSQL |
+| GitHub Actions | — | CI/CD — lint, validate, deploy |
 | Git + GitHub | — | Version control |
 
 ---
 
-## 🔄 Data Pipeline Flow
+## Data Pipeline Flow
 
 ### Daily Execution (6am AEST)
 
@@ -127,18 +134,18 @@ Step 3 — Lambda 1 executes
          ↓
 Step 4 — Lambda 2 executes (receives S3 URIs from Lambda 1)
          • Reads each CSV from S3 into memory
-         • Deletes existing rows for this run (idempotency)
-         • Bulk inserts into RDS staging schema (raw_* tables)
+         • Dimension tables: full wipe + reload (products, stores, customers)
+         • Fact table: idempotent delete by created_at + insert (raw_sales)
          • Logs run to pipeline_runs metadata table
          ↓
-Step 5 — EC2 receives SSM command, runs dbt
-         • dbt snapshot → SCD Type 2 on dim_product, dim_store
-         • dbt run staging → creates stg_* views on raw_* tables
-         • dbt run gold → builds fact_sales (incremental) + dim tables
-         • dbt test → validates data quality (18 tests)
+Step 5 — Step Functions sends SSM command to EC2, polls until complete
+         • dbt run staging  → creates stg_* views on raw_* tables
+         • dbt snapshot     → SCD Type 2 on dim_product, dim_store
+         • dbt run gold     → builds fact_sales (incremental) + dim tables
+         • dbt test         → validates data quality (14 tests)
          ↓
 Step 6 — SNS publishes success email
-         "Pipeline completed successfully for 2026-04-23. Rows loaded: 760"
+         "Pipeline completed successfully for 2026-04-24. Rows loaded: 760"
 ```
 
 ### On Failure
@@ -152,17 +159,17 @@ Any step fails → Step Functions catches error
 
 ---
 
-## 🗄️ Database Design
+## Database Design
 
 ### RDS PostgreSQL — Two Schemas
 
 ```
 fmcg_db
 ├── staging schema (Silver — owned by Lambda 2)
-│   ├── raw_products    ← raw CSV data, loaded daily
-│   ├── raw_stores      ← raw CSV data, loaded daily
-│   ├── raw_customers   ← raw CSV data, loaded daily
-│   └── raw_sales       ← raw CSV data, loaded daily
+│   ├── raw_products    ← full replace each run (master data)
+│   ├── raw_stores      ← full replace each run (master data)
+│   ├── raw_customers   ← full replace each run (master data)
+│   └── raw_sales       ← accumulates daily (watermark for incremental)
 │
 └── gold schema (Gold — owned by dbt)
     ├── stg_products*         ← dbt view, typed + cleaned
@@ -173,10 +180,10 @@ fmcg_db
     ├── dim_product_snapshot  ← SCD Type 2 history
     ├── dim_store_snapshot    ← SCD Type 2 history
     ├── dim_customer          ← SCD Type 1 (overwrite)
-    ├── dim_date              ← static date spine (2026-2027)
+    ├── dim_date              ← static date spine (2 years)
     └── pipeline_runs         ← metadata logging
 
-* dbt staging views
+* dbt staging views live in staging schema
 ```
 
 ### Star Schema (Gold Layer)
@@ -234,26 +241,26 @@ fmcg_db
 
 ---
 
-## ⚙️ Data Engineering Patterns
+## Data Engineering Patterns
 
 | Pattern | Implementation | Where |
 |---|---|---|
-| **Idempotency** | Delete-then-insert on every staging load | Lambda 2 |
-| **Incremental load** | `created_at` watermark — only new rows | dbt fact_sales model |
-| **Backfill** | `RUN_DATE` parameter accepted by Lambda 1 + 2 | Both Lambdas |
-| **SCD Type 2** | dbt snapshots — expire old rows, insert new | dim_product, dim_store |
-| **SCD Type 1** | `DISTINCT ON` deduplication | dim_customer |
+| **Idempotency** | Dimension tables: full wipe + reload. Fact table: delete by exact `created_at` | Lambda 2 |
+| **Incremental load** | `created_at` watermark with `COALESCE` null guard — only new rows | dbt fact_sales |
+| **Backfill** | `run_date` parameter accepted by Lambda 1 + 2 via Step Functions | Both Lambdas |
+| **SCD Type 2** | dbt snapshots on `raw_*` tables — expire old rows, insert new | dim_product, dim_store |
+| **SCD Type 1** | `DISTINCT ON` deduplication — latest record wins | dim_customer |
 | **S3 partitioning** | `/year=/month=/day/` folder structure | Lambda 1 |
-| **Watermarking** | `pipeline_runs` table tracks last loaded timestamp | RDS gold schema |
 | **Metadata logging** | Every run logged — status, rows, duration, errors | Lambda 2 + logger.py |
-| **Data quality** | 18 dbt tests — unique, not_null, accepted_values | dbt test suite |
+| **Data quality** | 14 dbt tests — unique, not_null | dbt test suite |
 | **Retry logic** | Step Functions built-in retry with exponential backoff | State machine |
+| **SSM polling** | `WaitForDbt → CheckDbtStatus → IsDbtComplete` loop — waits for real completion | State machine |
 | **Alerting** | SNS email on success and failure | Step Functions |
-| **Observability** | CloudWatch logs for all Lambda and dbt runs | Automatic |
+| **Observability** | CloudWatch logs for all Lambda, SSM and dbt runs | Automatic |
 
 ---
 
-## 📊 Synthetic Dataset
+## Synthetic Dataset
 
 Generated using Python Faker (Australian locale) with `random.seed(42)` for reproducible dimension data.
 
@@ -261,10 +268,10 @@ Generated using Python Faker (Australian locale) with `random.seed(42)` for repr
 
 | Table | Records | Refresh |
 |---|---|---|
-| Products | 50 | Stable (SCD changes on Mondays) |
-| Stores | 10 | Stable (SCD changes on Mondays) |
-| Customers | 200 | Stable (SCD Type 1) |
-| Daily transactions | 500 | New rows every day |
+| Products | 50 | Full replace each run (SCD changes on Mondays) |
+| Stores | 10 | Full replace each run (SCD changes on Mondays) |
+| Customers | 200 | Full replace each run (SCD Type 1) |
+| Daily transactions | 500 | New rows appended every day |
 
 ### FMCG Categories
 
@@ -297,16 +304,45 @@ This triggers dbt snapshots to record history — demonstrating real SCD Type 2 
 
 ---
 
-## 📁 Project Structure
+## CI/CD
+
+GitHub Actions runs two workflows on every push.
+
+### CI — runs on every push and pull request to `main`
+
+Three parallel jobs:
+
+| Job | What it checks |
+|---|---|
+| **Lint Python** | flake8 across all Lambda, utils, and test files |
+| **Validate dbt** | `dbt parse` — validates all SQL and YAML without a database connection |
+| **Validate state machine JSON** | Confirms `state_machine.json` is valid JSON |
+
+![All 6 CI checks passing on a pull request](docs/screenshots/github_ci_checks_passing.png)
+
+### CD — runs on push to `main` only
+
+Two sequential jobs:
+
+| Job | What it does |
+|---|---|
+| **Deploy Lambdas** | Packages both Lambdas with dependencies (manylinux platform for psycopg2), deploys to AWS |
+| **Sync dbt to EC2** | SCPs updated models, snapshots, macros and `dbt_project.yml` to EC2 |
+
+---
+
+## Project Structure
 
 ```
 retail-fmcg-aws-s3-rds-dbt-stepfunctions-pipeline/
 │
 ├── data_generator/
 │   ├── generate.py              # Synthetic data generator
+│   ├── README.md
 │   └── output/                  # Local CSV output (gitignored)
 │
 ├── lambda/
+│   ├── README.md
 │   ├── lambda_1_generator/
 │   │   ├── handler.py           # Lambda 1 — generate + upload to S3
 │   │   └── requirements.txt     # Faker, pandas, python-dotenv
@@ -315,33 +351,23 @@ retail-fmcg-aws-s3-rds-dbt-stepfunctions-pipeline/
 │       └── requirements.txt     # psycopg2-binary, python-dotenv
 │
 ├── dbt/
+│   ├── README.md
 │   └── fmcg_pipeline/
 │       ├── dbt_project.yml
 │       ├── macros/
 │       │   └── generate_schema_name.sql
 │       ├── models/
-│       │   ├── staging/
-│       │   │   ├── sources.yml
-│       │   │   ├── schema.yml
-│       │   │   ├── stg_products.sql
-│       │   │   ├── stg_stores.sql
-│       │   │   ├── stg_customers.sql
-│       │   │   └── stg_sales.sql
-│       │   └── gold/
-│       │       ├── dim_customer.sql
-│       │       ├── dim_date.sql
-│       │       └── fact_sales.sql
-│       └── snapshots/
-│           ├── dim_product_snapshot.sql
-│           └── dim_store_snapshot.sql
+│       │   ├── staging/         # stg_* views on raw_* tables
+│       │   └── gold/            # fact_sales, dim_customer, dim_date
+│       └── snapshots/           # SCD Type 2 — dim_product, dim_store
 │
 ├── step_functions/
 │   └── state_machine.json       # Step Functions state machine
 │
 ├── infrastructure/
+│   ├── README.md
 │   ├── setup_rds.py             # Creates RDS schemas and tables
-│   ├── deploy_lambdas.py        # Packages and deploys Lambdas to AWS
-│   └── setup_notes.md           # AWS resource setup documentation
+│   └── deploy_lambdas.py        # Packages and deploys Lambdas to AWS
 │
 ├── utils/
 │   ├── config.py                # Environment variable loader
@@ -350,26 +376,29 @@ retail-fmcg-aws-s3-rds-dbt-stepfunctions-pipeline/
 │   └── logger.py                # pipeline_runs metadata logging
 │
 ├── tests/
-│   ├── test_lambda_1.py         # Local test for Lambda 1
-│   └── test_lambda_2.py         # Local test for Lambda 2
+│   ├── test_lambda_1.py         # Local integration test for Lambda 1
+│   └── test_lambda_2.py         # Local integration test for Lambda 2
 │
-├── .claude/
-│   └── claude.md                # Project context for Claude AI
+├── docs/
+│   └── screenshots/             # Pipeline screenshots
+│
+├── .github/
+│   └── workflows/
+│       ├── ci.yml               # Lint + validate on every push
+│       └── deploy.yml           # Deploy on push to main
 │
 ├── sync_dbt.ps1                 # Sync local dbt files to EC2
-├── load_env.ps1                 # Load .env variables into PowerShell
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Environment variable template
+├── requirements.txt             # Full dev dependencies
 └── README.md
 ```
 
 ---
 
-## 🚀 Setup Guide
+## Setup Guide
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.9+
 - AWS account with credits
 - Power BI Desktop
 - VS Code
@@ -404,10 +433,9 @@ aws configure
 # Enter: Access Key, Secret Key, Region (ap-southeast-2), Format (json)
 ```
 
-### 5. Create AWS Infrastructure
+### 5. Create RDS Schema and Tables
 
 ```bash
-# S3 bucket, RDS, EC2, IAM roles, SNS — see infrastructure/setup_notes.md
 python infrastructure/setup_rds.py
 ```
 
@@ -424,7 +452,7 @@ python infrastructure/deploy_lambdas.py
 ssh fmcg-ec2
 
 # Install dbt
-pip3 install dbt-core dbt-postgres psycopg2-binary
+pip install dbt-core dbt-postgres psycopg2-binary
 
 # Configure profiles.yml with RDS credentials
 mkdir -p ~/.dbt
@@ -437,74 +465,130 @@ nano ~/.dbt/profiles.yml
 .\sync_dbt.ps1
 ```
 
-### 9. Deploy Step Functions and EventBridge
+### 9. Store RDS credentials in SSM Parameter Store
 
 ```bash
-aws stepfunctions create-state-machine \
-  --name "retail-fmcg-daily-pipeline" \
-  --definition file://step_functions/state_machine.json \
-  --role-arn "arn:aws:iam::YOUR_ACCOUNT:role/retail-fmcg-stepfunctions-role"
-
-aws events put-rule \
-  --name "retail-fmcg-daily-trigger" \
-  --schedule-expression "cron(0 20 * * ? *)" \
-  --state ENABLED
+aws ssm put-parameter --name /fmcg/db_host     --type SecureString --value "your-rds-endpoint"
+aws ssm put-parameter --name /fmcg/db_user     --type SecureString --value "your-db-user"
+aws ssm put-parameter --name /fmcg/db_password --type SecureString --value "your-db-password"
 ```
+
+### 10. Deploy Step Functions and EventBridge
+
+Paste `step_functions/state_machine.json` into the AWS Console:
+**Step Functions → Create state machine → paste JSON → Save**
+
+Then create the daily trigger:
+**EventBridge → Rules → Create rule → schedule `cron(0 20 * * ? *)` → target: state machine ARN**
+
+### 11. Add GitHub Secrets for CI/CD
+
+In GitHub: **Settings → Secrets and variables → Actions**, add:
+
+| Secret | Description |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | AWS credentials |
+| `AWS_SECRET_ACCESS_KEY` | AWS credentials |
+| `AWS_REGION` | `ap-southeast-2` |
+| `S3_BUCKET` | S3 bucket name |
+| `DB_HOST` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` / `DB_PORT` | RDS connection |
+| `SNS_TOPIC_ARN` | SNS topic ARN |
+| `NUM_TRANSACTIONS` | `500` |
+| `PIPELINE_ENV` | `dev` |
+| `EC2_HOST` | EC2 public IP or DNS |
+| `EC2_SSH_KEY` | Contents of your `.pem` key file |
 
 ---
 
-## ▶️ Pipeline Execution
+## Pipeline Execution
 
-### Manual Trigger
+### Manual Trigger via AWS Console
 
-```bash
-aws stepfunctions start-execution \
-  --state-machine-arn "arn:aws:states:ap-southeast-2:ACCOUNT:stateMachine:retail-fmcg-daily-pipeline" \
-  --input '{"run_date": "2026-04-23", "run_timestamp": "2026-04-23 06:00:00"}'
+Go to **Step Functions → Start execution** and pass:
+
+```json
+{
+  "run_date": "2026-04-23",
+  "run_timestamp": "2026-04-23 06:00:00"
+}
 ```
 
 ### Backfill a Specific Date
 
-```bash
-aws stepfunctions start-execution \
-  --state-machine-arn "arn:aws:states:ap-southeast-2:ACCOUNT:stateMachine:retail-fmcg-daily-pipeline" \
-  --input '{"run_date": "2026-04-01", "run_timestamp": "2026-04-01 06:00:00"}'
-```
+Same as above — just change the date. Lambda 1 generates data for that date, Lambda 2 loads it, dbt picks it up via the incremental watermark.
 
 ### Local Testing
 
 ```bash
-# Test data generator
+# Test data generator locally
 python data_generator/generate.py
 
-# Test Lambda 1 locally
+# Test Lambda 1 locally (requires AWS credentials)
 python tests/test_lambda_1.py
 
-# Test Lambda 2 locally
-python tests/test_lambda_2.py
-
-# Run dbt on EC2
+# Run dbt manually on EC2
 ssh fmcg-ec2
 cd /home/ec2-user/dbt/fmcg_pipeline
-dbt snapshot && dbt run && dbt test
+export DB_HOST=$(aws ssm get-parameter --name /fmcg/db_host --with-decryption --query Parameter.Value --output text)
+export DB_USER=$(aws ssm get-parameter --name /fmcg/db_user --with-decryption --query Parameter.Value --output text)
+export DB_PASSWORD=$(aws ssm get-parameter --name /fmcg/db_password --with-decryption --query Parameter.Value --output text)
+dbt run --select staging --profiles-dir ~/.dbt
+dbt snapshot --profiles-dir ~/.dbt
+dbt run --select gold --profiles-dir ~/.dbt
+dbt test --profiles-dir ~/.dbt
 ```
 
 ---
 
-## 📡 Monitoring and Alerting
+## Pipeline in Action
+
+### Step Functions — state machine graph
+
+Every step is visible in real time. The polling loop (`WaitForDbt → CheckDbtStatus → IsDbtComplete`) waits for dbt to actually finish before reporting success.
+
+![Step Functions state machine graph showing all states](docs/screenshots/step_functions_state_machine_graph.png)
+
+### Step Functions — execution history
+
+Multiple daily runs visible with success/failure status and duration.
+
+![Step Functions execution history with success and failed runs](docs/screenshots/step_functions_execution_history.png)
+
+### SNS email alerts
+
+Pipeline sends a success or failure email after every run.
+
+![Email inbox showing SNS pipeline success and failure alerts](docs/screenshots/sns_pipeline_email_alerts.png)
+
+### fact_sales — data accumulating daily
+
+500 rows per day, each run appending to the incremental fact table.
+
+![Query showing 500 rows for April 23 and 500 rows for April 24](docs/screenshots/fact_sales_rows_by_date.png)
+
+### Database row counts — full picture
+
+All staging and gold tables populated after two daily runs.
+
+![Row counts across all staging and gold tables](docs/screenshots/database_row_counts.png)
+
+---
+
+## Monitoring and Alerting
 
 ### SNS Email Alerts
 
 | Event | Subject | Message |
 |---|---|---|
 | Success | `FMCG Pipeline - Success` | Run date, rows loaded |
-| Failure | `FMCG Pipeline - FAILED` | Step that failed, error details |
+| Failure | `FMCG Pipeline - FAILED` | Full state detail for debugging |
 
 ### CloudWatch Log Groups
 
 ```
 /aws/lambda/retail-fmcg-lambda-1-generator
 /aws/lambda/retail-fmcg-lambda-2-staging
+/fmcg/ssm/dbt
 ```
 
 ### Pipeline Runs Table
@@ -515,7 +599,7 @@ SELECT
     run_date,
     status,
     rows_loaded,
-    finished_at - started_at as duration,
+    finished_at - started_at AS duration,
     error_message
 FROM gold.pipeline_runs
 ORDER BY run_id DESC;
@@ -523,19 +607,18 @@ ORDER BY run_id DESC;
 
 ### dbt Test Results
 
-18 automated data quality tests covering:
+14 automated data quality tests covering:
 - `unique` constraints on all primary keys
-- `not_null` constraints on critical columns
-- Referential integrity across fact and dimension tables
+- `not_null` constraints on all foreign keys and critical columns
 
 ---
 
-## 💰 Cost Estimate
+## Cost Estimate
 
 | Service | Monthly Cost |
 |---|---|
-| RDS PostgreSQL (db.t4g.micro) | ~$20 |
-| EC2 (t2.micro) | ~$10 |
+| RDS PostgreSQL (db.t3.micro) | ~$20 |
+| EC2 (t3.micro) | ~$10 |
 | S3 (< 1GB) | ~$0.02 |
 | Lambda (< 1M invocations) | Free tier |
 | Step Functions | Free tier |
@@ -543,11 +626,11 @@ ORDER BY run_id DESC;
 | SNS (< 1000 emails) | Free tier |
 | **Total** | **~$30/month** |
 
-> Note: Costs covered by AWS credits for this portfolio project.
+> Costs covered by AWS credits for this portfolio project.
 
 ---
 
-## 🏭 Production Considerations
+## Production Considerations
 
 This project is built for a dev/portfolio environment. Production enhancements would include:
 
@@ -556,7 +639,7 @@ This project is built for a dev/portfolio environment. Production enhancements w
 | IAM policies | FullAccess for simplicity | Least privilege custom policies |
 | RDS access | Public + 0.0.0.0/0 for Lambda | Private VPC + Lambda inside VPC |
 | SSL | Force SSL disabled for Power BI | SSL enforced with certificate rotation |
-| Secrets | Environment variables | AWS Secrets Manager |
+| Secrets | SSM Parameter Store | AWS Secrets Manager |
 | File format | CSV (simple, debuggable) | Parquet (compressed, typed) |
 | EC2 | Always on | Stop/start schedule to save cost |
 | dbt | Single EC2 instance | dbt Cloud or MWAA |
@@ -564,7 +647,7 @@ This project is built for a dev/portfolio environment. Production enhancements w
 
 ---
 
-## 💡 Key Learnings
+## Key Learnings
 
 ### Architecture Decisions
 
@@ -580,18 +663,21 @@ Small dataset (500 rows/day), simple batch processing, direct Power BI connectio
 **Why CSV over Parquet in S3?**
 Simple pipeline, small data, direct load to PostgreSQL. Parquet requires pyarrow in Lambda and conversion before loading to RDS. CSV loads directly with psycopg2. Production would use Parquet for compression and type safety.
 
+**Why separate `raw_*` tables from `stg_*` views?**
+Lambda 2 loads raw data into physical tables (`raw_*`). dbt creates views (`stg_*`) on top that apply type casting and renaming. Naming them the same caused a circular self-reference — the view tried to read from itself. Separating the names makes the ownership clear: Lambda owns `raw_*`, dbt owns `stg_*`.
+
 ---
 
-## 👤 Author
+## Author
 
 **Phil Dinh**
 Data Engineer | Sydney, Australia
 
-- Portfolio: [github.com/phildinh](https://github.com/phildinh)
-- LinkedIn: [linkedin.com/in/phildinh](https://linkedin.com/in/phildinh)
+- GitHub: [github.com/phildinh](https://github.com/phildinh)
+- LinkedIn: [linkedin.com/in/phil-dinh](https://www.linkedin.com/in/phil-dinh/)
 
 ---
 
-## 📄 License
+## License
 
 MIT License — feel free to use this project as a reference for your own data engineering work.

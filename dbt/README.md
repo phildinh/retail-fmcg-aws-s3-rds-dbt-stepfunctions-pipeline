@@ -71,8 +71,10 @@ Tracks slowly changing dimensions for products and stores. When a tracked column
 
 | Snapshot | Source | Tracked columns |
 |---|---|---|
-| `dim_product_snapshot` | `stg_products` | `unit_price`, `unit_cost`, `category` |
-| `dim_store_snapshot` | `stg_stores` | `region`, `store_type`, `state` |
+| `dim_product_snapshot` | `staging.raw_products` (via `source()`) | `unit_price`, `unit_cost`, `category` |
+| `dim_store_snapshot` | `staging.raw_stores` (via `source()`) | `region`, `store_type`, `state` |
+
+> Snapshots read directly from the raw source tables, not the dbt staging views. This removes any ordering dependency — snapshots can run before or after staging models.
 
 ### Gold — star schema (`models/gold/`)
 
@@ -89,13 +91,18 @@ Tracks slowly changing dimensions for products and stores. When a tracked column
 `fact_sales` uses an incremental strategy with `created_at` as the watermark:
 
 ```sql
-where created_at > (select max(created_at) from {{ this }})
+where created_at > (
+    select coalesce(max(created_at), '1900-01-01'::timestamp)
+    from {{ this }}
+)
 ```
+
+`COALESCE` handles the edge case where `fact_sales` exists but is empty — without it, `max(created_at)` returns `NULL` and `anything > NULL` evaluates to `NULL` (not TRUE), so zero rows would load. The fallback `'1900-01-01'` ensures all rows load when the table is empty.
 
 Each daily pipeline run appends only new rows. To do a full refresh:
 
 ```bash
-dbt run --select fact_sales --full-refresh
+dbt run --select fact_sales --full-refresh --profiles-dir /home/ec2-user/.dbt
 ```
 
 ---
@@ -108,20 +115,14 @@ dbt run --select fact_sales --full-refresh
 
 ## Run order
 
-Snapshots depend on staging views existing first. Always run in this order:
-
 ```bash
-dbt run --select staging   # build stg_* views
-dbt snapshot               # SCD Type 2 on products and stores
-dbt run --select gold      # build fact and dim tables
-dbt test                   # validate data quality
+dbt run --select staging --profiles-dir /home/ec2-user/.dbt   # build stg_* views
+dbt snapshot               --profiles-dir /home/ec2-user/.dbt   # SCD Type 2 on products and stores
+dbt run --select gold      --profiles-dir /home/ec2-user/.dbt   # build fact and dim tables
+dbt test                   --profiles-dir /home/ec2-user/.dbt   # validate data quality
 ```
 
-To run everything in one command:
-
-```bash
-dbt run && dbt snapshot && dbt test
-```
+> Snapshots now read directly from `raw_*` source tables so they have no dependency on staging views. The order above matches the Step Functions pipeline.
 
 ---
 
@@ -159,10 +160,13 @@ This copies `models/`, `snapshots/`, `macros/`, and `dbt_project.yml` to the EC2
 ## Common issues
 
 **`relation "staging.raw_*" does not exist`**
-Lambda 2 hasn't run yet for this date. Run Lambda 2 first to load raw data, then re-run dbt.
+Lambda 2 hasn't run yet for this date, or `setup_rds.py` hasn't been run. Run `python infrastructure/setup_rds.py` first, then trigger the pipeline.
 
-**`relation "staging.stg_*" does not exist` (in snapshot or gold)**
-You ran `dbt snapshot` or `dbt run --select gold` before `dbt run --select staging`. Always run staging first.
+**`relation "staging.stg_*" does not exist` (in gold)**
+`dbt run --select staging` hasn't run yet. Always run staging before gold.
 
 **`fact_sales` not picking up new rows**
-Check that Lambda 2 loaded a new `created_at` timestamp. The incremental filter uses `created_at` as the watermark — if Lambda 2 failed, there are no new rows to load.
+Check that Lambda 2 loaded a new `created_at` timestamp. The incremental filter uses `created_at` as the watermark — if Lambda 2 failed, there are no new rows to load. If `fact_sales` exists but is empty, the `COALESCE` fallback ensures all rows load on the next run.
+
+**`unique` test failures on `stg_customers`, `stg_products`, `stg_stores`**
+The raw dimension tables have accumulated duplicate rows from multiple pipeline runs. Truncate them in RDS (`TRUNCATE TABLE staging.raw_products` etc.) and re-run. Dimension tables are wiped and reloaded on each run — duplicates only appear if rows were manually inserted or a previous bug caused accumulation.

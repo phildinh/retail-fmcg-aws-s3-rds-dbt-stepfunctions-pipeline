@@ -61,28 +61,26 @@
       "Parameters": {
         "DocumentName": "AWS-RunShellScript",
         "InstanceIds": ["i-0d5a310331e078521"],
+        "CloudWatchOutputConfig": {
+          "CloudWatchLogGroupName": "/fmcg/ssm/dbt",
+          "CloudWatchOutputEnabled": true
+        },
         "Parameters": {
           "commands": [
+            "export PATH=/home/ec2-user/.local/bin:$PATH",
+            "export PYTHONPATH=/home/ec2-user/.local/lib/python3.9/site-packages:$PYTHONPATH",
             "cd /home/ec2-user/dbt/fmcg_pipeline",
-            "export DB_HOST=$(aws ssm get-parameter --name /fmcg/db_host --query Parameter.Value --output text)",
-            "export DB_USER=$(aws ssm get-parameter --name /fmcg/db_user --query Parameter.Value --output text)",
-            "export DB_PASSWORD=$(aws ssm get-parameter --name /fmcg/db_password --query Parameter.Value --output text)",
-            "dbt snapshot --profiles-dir /home/ec2-user/.dbt",
+            "export DB_HOST=$(aws ssm get-parameter --name /fmcg/db_host --with-decryption --query Parameter.Value --output text)",
+            "export DB_USER=$(aws ssm get-parameter --name /fmcg/db_user --with-decryption --query Parameter.Value --output text)",
+            "export DB_PASSWORD=$(aws ssm get-parameter --name /fmcg/db_password --with-decryption --query Parameter.Value --output text)",
             "dbt run --select staging --profiles-dir /home/ec2-user/.dbt",
+            "dbt snapshot --profiles-dir /home/ec2-user/.dbt",
             "dbt run --select gold --profiles-dir /home/ec2-user/.dbt",
             "dbt test --profiles-dir /home/ec2-user/.dbt"
           ]
         }
       },
       "ResultPath": "$.dbt_result",
-      "Retry": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "IntervalSeconds": 60,
-          "MaxAttempts": 1,
-          "BackoffRate": 2
-        }
-      ],
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -90,7 +88,57 @@
           "ResultPath": "$.error"
         }
       ],
-      "Next": "NotifySuccess"
+      "Next": "WaitForDbt"
+    },
+
+    "WaitForDbt": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckDbtStatus"
+    },
+
+    "CheckDbtStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getCommandInvocation",
+      "Parameters": {
+        "CommandId.$": "$.dbt_result.Command.CommandId",
+        "InstanceId": "i-0d5a310331e078521"
+      },
+      "ResultPath": "$.dbt_status",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "WaitForDbt"
+        }
+      ],
+      "Next": "IsDbtComplete"
+    },
+
+    "IsDbtComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.dbt_status.Status",
+          "StringEquals": "Success",
+          "Next": "NotifySuccess"
+        },
+        {
+          "Variable": "$.dbt_status.Status",
+          "StringEquals": "Failed",
+          "Next": "NotifyFailure"
+        },
+        {
+          "Variable": "$.dbt_status.Status",
+          "StringEquals": "TimedOut",
+          "Next": "NotifyFailure"
+        },
+        {
+          "Variable": "$.dbt_status.Status",
+          "StringEquals": "Cancelled",
+          "Next": "NotifyFailure"
+        }
+      ],
+      "Default": "WaitForDbt"
     },
 
     "NotifySuccess": {
@@ -110,7 +158,7 @@
       "Parameters": {
         "TopicArn": "arn:aws:sns:ap-southeast-2:819404925252:retail-fmcg-pipeline-alerts",
         "Subject": "FMCG Pipeline - FAILED",
-        "Message.$": "States.Format('Pipeline failed. Error: {}', States.JsonToString($.error))"
+        "Message.$": "States.Format('Pipeline failed. Full state: {}', States.JsonToString($))"
       },
       "Next": "PipelineFailed"
     },
