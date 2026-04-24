@@ -51,13 +51,11 @@ def get_s3_key(table_name: str, run_date: str,
 
 def load_products(rows: list, run_timestamp: str):
     """
-    Load products into staging — idempotent delete then insert.
-    Delete by run_timestamp ensures retries are safe.
+    Load products into staging — full replace each run.
+    Dimensions are master data: wipe and reload the current snapshot.
+    SCD Type 2 history is tracked in gold.dim_product_snapshot, not here.
     """
-    execute_query(
-        "DELETE FROM staging.raw_products WHERE loaded_at::text LIKE %s",
-        (f"{run_timestamp[:10]}%",)
-    )
+    execute_query("DELETE FROM staging.raw_products")
 
     records = [(
         r["product_id"], r["product_name"], r["category"],
@@ -78,12 +76,11 @@ def load_products(rows: list, run_timestamp: str):
 
 def load_stores(rows: list, run_timestamp: str):
     """
-    Load stores into staging — idempotent delete then insert.
+    Load stores into staging — full replace each run.
+    Dimensions are master data: wipe and reload the current snapshot.
+    SCD Type 2 history is tracked in gold.dim_store_snapshot, not here.
     """
-    execute_query(
-        "DELETE FROM staging.raw_stores WHERE loaded_at::text LIKE %s",
-        (f"{run_timestamp[:10]}%",)
-    )
+    execute_query("DELETE FROM staging.raw_stores")
 
     records = [(
         r["store_id"], r["store_name"], r["state"],
@@ -103,13 +100,10 @@ def load_stores(rows: list, run_timestamp: str):
 
 def load_customers(rows: list, run_timestamp: str):
     """
-    Load customers into staging — idempotent delete then insert.
+    Load customers into staging — full replace each run.
+    Customers use SCD Type 1 (latest state wins), so wiping is correct.
     """
-    execute_query(
-        "DELETE FROM staging.raw_customers "
-        "WHERE loaded_at::text LIKE %s",
-        (f"{run_timestamp[:10]}%",)
-    )
+    execute_query("DELETE FROM staging.raw_customers")
 
     records = [(
         r["customer_id"], r["age_group"],

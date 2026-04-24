@@ -100,14 +100,14 @@ Both fields are optional — Lambda 1 defaults to today's date if omitted.
 
 ### Idempotency
 
-Each table uses a different delete key to make reruns safe:
+Each table uses a different strategy:
 
-| Table | Delete key | Why |
+| Table | Delete strategy | Why |
 |---|---|---|
-| `raw_products` | `loaded_at::date` | Full refresh per day |
-| `raw_stores` | `loaded_at::date` | Full refresh per day |
-| `raw_customers` | `loaded_at::date` | Full refresh per day |
-| `raw_sales` | `created_at` | Exact timestamp match — preserves watermark for dbt incremental |
+| `raw_products` | `DELETE FROM staging.raw_products` (all rows) | Dimensions are master data — always reload the full current snapshot. SCD Type 2 history lives in `gold.dim_product_snapshot`, not here. |
+| `raw_stores` | `DELETE FROM staging.raw_stores` (all rows) | Same as above — history in `gold.dim_store_snapshot`. |
+| `raw_customers` | `DELETE FROM staging.raw_customers` (all rows) | SCD Type 1 — latest state always wins, no history needed. |
+| `raw_sales` | `DELETE ... WHERE created_at = run_timestamp` | Exact timestamp match — accumulates history across days for dbt incremental watermark. |
 
 ### Event input (from Lambda 1 via Step Functions)
 

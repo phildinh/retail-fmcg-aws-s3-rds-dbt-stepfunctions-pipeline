@@ -16,6 +16,6 @@ select
     region,
     store_type,
     city
-from {{ ref('stg_stores') }}
+from {{ source('staging', 'raw_stores') }}
 
 {% endsnapshot %}
