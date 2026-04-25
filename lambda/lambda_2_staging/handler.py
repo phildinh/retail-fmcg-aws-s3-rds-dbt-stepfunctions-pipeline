@@ -121,15 +121,15 @@ def load_customers(rows: list, run_timestamp: str):
     return len(records)
 
 
-def load_fact_sales(rows: list, run_timestamp: str):
+def load_fact_sales(rows: list, run_timestamp: str, run_date: str):
     """
     Load fact sales into staging — idempotent.
-    Delete by created_at (the watermark column) so dbt
-    incremental model can correctly identify new rows.
+    Delete by transaction_date so re-running the same date always
+    replaces that day's data cleanly, regardless of run_timestamp.
     """
     execute_query(
-        "DELETE FROM staging.raw_sales WHERE created_at = %s",
-        (run_timestamp,)
+        "DELETE FROM staging.raw_sales WHERE transaction_date = %s",
+        (run_date,)
     )
 
     records = [(
@@ -223,7 +223,7 @@ def handler(event: dict, context) -> dict:
         print("\n[4/4] Loading fact sales...")
         key  = get_s3_key("fact_sales", run_date, bucket)
         rows = read_csv_from_s3(bucket, key)
-        total_rows += load_fact_sales(rows, run_timestamp)
+        total_rows += load_fact_sales(rows, run_timestamp, run_date)
 
         # ── Log success ───────────────────────────────────
         log_run_success(run_id, total_rows)

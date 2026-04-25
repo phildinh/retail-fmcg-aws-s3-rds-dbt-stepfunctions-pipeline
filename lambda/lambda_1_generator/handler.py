@@ -1,7 +1,8 @@
 import sys
 import os
 import json
-from datetime import date, datetime
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # Allow Lambda to import from project root
 sys.path.insert(0, os.path.dirname(
@@ -43,11 +44,17 @@ def handler(event: dict, context) -> dict:
     print(f"Lambda 1 started — event: {json.dumps(event)}")
 
     # ── Resolve run identifiers ───────────────────────────
+    # Use AEST so the pipeline date matches the Australian business day.
+    # Lambda runs in UTC — without this, a 6am AEST trigger (20:00 UTC)
+    # would return yesterday's UTC date instead of today's AEST date.
+    aest = ZoneInfo("Australia/Sydney")
+    now_aest = datetime.now(aest)
+
     run_date = (event.get("run_date") or
-                date.today().strftime("%Y-%m-%d"))
+                now_aest.strftime("%Y-%m-%d"))
 
     run_timestamp = (event.get("run_timestamp") or
-                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                     now_aest.strftime("%Y-%m-%d %H:%M:%S"))
 
     print(f"Run date:      {run_date}")
     print(f"Run timestamp: {run_timestamp}")

@@ -1,6 +1,58 @@
 # Retail FMCG AWS Data Pipeline
 
-> A production-grade, fully automated cloud data pipeline built on AWS — migrating a local FMCG retail pipeline to a scalable, serverless architecture with daily automated runs, SCD Type 2 history tracking, CI/CD, and Power BI reporting.
+> A fully automated, production-grade cloud data pipeline built on AWS — with end-to-end observability, automated data quality testing, CI/CD, and real production bugs encountered, diagnosed, and fixed.
+
+---
+
+## What Makes This Project Different
+
+Anyone can follow a tutorial and connect Lambda to RDS. What this project demonstrates is what happens **after** you deploy — when things break silently, when tests catch what your eyes miss, and when you have to diagnose a failure at 6am from an email alert.
+
+### The pipeline runs daily and tells you when it fails
+
+Every morning at 6am AEST, EventBridge triggers a Step Functions state machine that runs end-to-end without human intervention. When something goes wrong — and things did go wrong — an SNS email lands in your inbox with the exact error. No checking dashboards. No manually running scripts.
+
+![SNS email alerts for pipeline success and failure](docs/screenshots/sns_pipeline_email_alerts.png)
+
+### dbt tests caught real bugs before they reached the dashboard
+
+14 automated data quality tests run on every pipeline execution. They caught things that would have silently corrupted the data:
+
+- **Duplicate transaction IDs** — a failed morning run (timezone bug) reloaded April 24 data into a table that already had it. The `unique` test on `transaction_id` failed with 500 results. Without the test, fact_sales would have had 1,000 rows for one day with duplicate keys — and Power BI would have double-counted every metric for that day.
+- **Dimension table accumulation** — products, stores and customers were accumulating rows across daily runs instead of replacing them. The `unique` test on `product_id` caught 100 rows (2 × 50 products) instead of 50. Fixed by changing the delete strategy from date-filtered to full-replace.
+
+### When tests failed, CloudWatch showed exactly why
+
+SSM streams all dbt output to CloudWatch. When the unique test failed, the full error — including the compiled SQL — was visible in the log within seconds.
+
+![CloudWatch log showing dbt unique test failure with full error detail](docs/screenshots/cloud_watch_error.png)
+
+### Step Functions actually waits for dbt to finish
+
+The original state machine used `ssm:sendCommand` which returns immediately when SSM **accepts** the command — not when dbt finishes. The pipeline was reporting "Success" before dbt had even started, and failures were completely invisible.
+
+Fixed by adding a polling loop: `WaitForDbt → CheckDbtStatus → IsDbtComplete` that polls every 30 seconds until SSM reports the actual result.
+
+![Step Functions state machine with polling loop](docs/screenshots/step_functions_state_machine_graph.png)
+
+### Real production bugs found and fixed
+
+| Bug | How it was found | Fix |
+|---|---|---|
+| dbt staging views had same name as raw tables — circular self-reference | `relation does not exist` error on first dbt run | Renamed Lambda 2 tables to `raw_*`, dbt views stay as `stg_*` |
+| Step Functions reported success before dbt finished | Pipeline "succeeded" but fact_sales had no new rows | Added SSM polling loop with `WaitForDbt → CheckDbtStatus` |
+| `dbt snapshot` ran before staging views existed | Snapshot failed silently, gold models never ran | Snapshots now read from `raw_*` source tables directly, no dependency on staging |
+| `max(created_at)` returns NULL on empty table | fact_sales stayed empty after truncate — incremental loaded 0 rows | Added `COALESCE(max(created_at), '1900-01-01')` null guard |
+| Lambda used UTC date, EventBridge fires at 20:00 UTC (6am AEST) | Pipeline generated yesterday's data every morning | Fixed Lambda 1 to use `ZoneInfo("Australia/Sydney")` for date resolution |
+| SSM parameters are SecureString but fetched without `--with-decryption` | dbt received KMS ciphertext as hostname | Added `--with-decryption` flag to all SSM parameter fetches |
+| Lambda packages compiled for local OS, not Amazon Linux | `ModuleNotFoundError: No module named 'dbt'` on Lambda invocation | Deploy script uses `--platform manylinux2014_x86_64 --only-binary=:all:` |
+| Duplicate rows from re-running same date with different timestamps | `unique_stg_sales_transaction_id` FAIL 500 in dbt test | Changed delete key from `created_at` timestamp to `transaction_date` |
+
+### CI/CD — every push is validated before it reaches AWS
+
+GitHub Actions runs three checks on every push: Python lint, dbt project parse, and state machine JSON validation. On merge to `main`, both Lambdas are automatically packaged and deployed.
+
+![All CI checks passing on a pull request](docs/screenshots/github_ci_checks_passing.png)
 
 ---
 
@@ -590,6 +642,10 @@ All staging and gold tables populated after two daily runs.
 /aws/lambda/retail-fmcg-lambda-2-staging
 /fmcg/ssm/dbt
 ```
+
+All dbt stdout and stderr is streamed to `/fmcg/ssm/dbt` on every pipeline run. When a test fails, the exact error, the failing model, and the compiled SQL are all visible in the log — no SSH into EC2 needed.
+
+![CloudWatch log showing dbt unique test failure and compiled SQL path](docs/screenshots/cloud_watch_error.png)
 
 ### Pipeline Runs Table
 
