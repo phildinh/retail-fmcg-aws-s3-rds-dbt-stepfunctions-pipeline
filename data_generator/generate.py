@@ -208,10 +208,14 @@ def simulate_dimension_changes(
         products_df.at[idx, "unit_price"] = new_price
         products_df.at[idx, "unit_cost"]  = new_cost
 
-    # Change region on 1 random store
-    change_store = rng.randint(0, len(stores_df) - 1)
-    current_state = stores_df.at[change_store, "state"]
-    new_region    = rng.choice(STATES[current_state]["regions"])
+    # Change region on 1 random store — exclude current region so
+    # the value always differs and dbt snapshot detects the change.
+    change_store    = rng.randint(0, len(stores_df) - 1)
+    current_state   = stores_df.at[change_store, "state"]
+    current_region  = stores_df.at[change_store, "region"]
+    other_regions   = [r for r in STATES[current_state]["regions"]
+                       if r != current_region]
+    new_region      = rng.choice(other_regions)
     stores_df.at[change_store, "region"] = new_region
 
     return products_df, stores_df
