@@ -1,6 +1,6 @@
 # Retail FMCG AWS Data Pipeline
 
-> A fully automated, production-grade cloud data pipeline built on AWS — with end-to-end observability, automated data quality testing, CI/CD, and real production bugs encountered, diagnosed, and fixed.
+> A fully automated, production-grade cloud data pipeline built on AWS and dbt, featuring end-to-end orchestration, dimensional modelling in PostgreSQL, automated data quality testing, observability, CI/CD, and real production bugs identified, debugged, and resolved.
 
 ---
 
