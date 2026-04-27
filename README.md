@@ -8,9 +8,9 @@
 
 Anyone can follow a tutorial and connect Lambda to RDS. What this project demonstrates is what happens **after** you deploy — when things break silently, when tests catch what your eyes miss, and when you have to diagnose a failure at 6am from an email alert.
 
-### The pipeline runs daily and tells you when it fails
+### The pipeline ran for 5 consecutive days and tells you when it fails
 
-Every morning at 6am AEST, EventBridge triggers a Step Functions state machine that runs end-to-end without human intervention. When something goes wrong — and things did go wrong — an SNS email lands in your inbox with the exact error. No checking dashboards. No manually running scripts.
+EventBridge triggers a Step Functions state machine every morning at 6am AEST without human intervention. After 5 consecutive daily runs (Apr 23–27), the pipeline has accumulated **2,500 fact rows** across all tables. When something goes wrong — and things did go wrong — an SNS email lands in your inbox with the exact error. No checking dashboards. No manually running scripts.
 
 ![SNS email alerts for pipeline success and failure](docs/screenshots/sns_pipeline_email_alerts.png)
 
@@ -20,6 +20,17 @@ Every morning at 6am AEST, EventBridge triggers a Step Functions state machine t
 
 - **Duplicate transaction IDs** — a failed morning run (timezone bug) reloaded April 24 data into a table that already had it. The `unique` test on `transaction_id` failed with 500 results. Without the test, fact_sales would have had 1,000 rows for one day with duplicate keys — and Power BI would have double-counted every metric for that day.
 - **Dimension table accumulation** — products, stores and customers were accumulating rows across daily runs instead of replacing them. The `unique` test on `product_id` caught 100 rows (2 × 50 products) instead of 50. Fixed by changing the delete strategy from date-filtered to full-replace.
+
+### SCD Type 2 worked in the real pipeline — not just in theory
+
+On Monday (the first Monday after go-live), `generate.py` automatically changed prices on 2 products and flipped 1 store's region. dbt snapshot detected the changes, expired the old records, and inserted new current versions — exactly as designed.
+
+- `dim_product_snapshot`: 52 rows — 50 current + **2 expired** (price history preserved)
+- `dim_store_snapshot`: 11 rows — 10 current + **1 expired** (STR-009 Metro → Regional)
+
+Sales before Monday reference the old price. Sales from Monday onwards reference the new price. Full history, no data loss.
+
+![dim_store_snapshot showing expired and current record for STR-009](docs/screenshots/dim_store_scd_2_monday.png)
 
 ### When tests failed, CloudWatch showed exactly why
 
@@ -612,17 +623,29 @@ Pipeline sends a success or failure email after every run.
 
 ![Email inbox showing SNS pipeline success and failure alerts](docs/screenshots/sns_pipeline_email_alerts.png)
 
-### fact_sales — data accumulating daily
+### fact_sales — 5 consecutive days accumulating
 
-500 rows per day, each run appending to the incremental fact table.
+500 rows per day appended via the `created_at` incremental watermark. After 5 daily runs (Apr 23–27) the table holds 2,500 transactions with full revenue history.
 
-![Query showing 500 rows for April 23 and 500 rows for April 24](docs/screenshots/fact_sales_rows_by_date.png)
+![fact_sales query showing 500 rows per day across 5 days](docs/screenshots/dim_pro_scd_2_monday.png)
 
-### Database row counts — full picture
+### SCD Type 2 — store region change on Monday
 
-All staging and gold tables populated after two daily runs.
+STR-009 (Doyleville Wholesale, SA) changed region from **Metro → Regional** on Monday. dbt snapshot closed the old record (`dbt_valid_to = 2026-04-27`) and inserted a new current record (`dbt_valid_to = NULL`). Historical sales before Monday still reference Metro. Sales from Monday onwards reference Regional.
 
-![Row counts across all staging and gold tables](docs/screenshots/database_row_counts.png)
+![dim_store_snapshot showing STR-009 expired Metro record and new Regional record](docs/screenshots/dim_store_scd_2_monday.png)
+
+### Database row counts — after 5 days of live runs
+
+| Table | Rows | What it means |
+|---|---|---|
+| `raw_sales` | 2,500 | 5 days × 500 transactions accumulated |
+| `gold.fact_sales` | 2,500 | Full incremental history |
+| `gold.dim_product_snapshot` | 52 | 50 current + 2 expired (Monday price changes) |
+| `gold.dim_store_snapshot` | 11 | 10 current + 1 expired (Monday region change) |
+| `gold.pipeline_runs` | 24 | Every run logged — including test and failed runs |
+
+![Row counts across all staging and gold tables after 5 days](docs/screenshots/database_row_counts.png)
 
 ---
 
