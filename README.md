@@ -31,7 +31,8 @@ On Monday (the first Monday after go-live), `generate.py` automatically changed 
 
 Sales before Monday reference the old price. Sales from Monday onwards reference the new price. Full history, no data loss.
 
-![dim_store_snapshot showing expired and current record for STR-009](docs/screenshots/dim_store_scd_2_monday.png)
+![dim_store_snapshot showing expired and current record](docs/screenshots/dim_store_scd_2_monday.png)
+![dim_product_snapshot showing expired and current record](docs/screenshots/dim_pro_scd_2_monday.png)
 
 ### When tests failed, CloudWatch showed exactly why
 
@@ -622,7 +623,7 @@ Multiple daily runs visible with success/failure status and duration.
 
 Pipeline sends a success or failure email after every run.
 
-![Email inbox showing SNS pipeline success and failure alerts](docs/screenshots/sns_pipeline_email_alerts.png)
+![Email inbox showing SNS pipeline success and failure alerts](docs/screenshots/email_alert.png)
 
 ### fact_sales — 5 consecutive days accumulating
 
