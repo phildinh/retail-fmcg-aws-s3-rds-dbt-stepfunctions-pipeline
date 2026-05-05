@@ -28,9 +28,11 @@ On Monday (the first Monday after go-live), `generate.py` automatically changed 
 
 - `dim_product_snapshot`: 52 rows — 50 current + **2 expired** (price history preserved)
 - `dim_store_snapshot`: 11 rows — 10 current + **1 expired** (STR-009 Metro → Regional)
+- Data stores in `S3 using partitionning` better for efficient data storage and retrieval
 
 Sales before Monday reference the old price. Sales from Monday onwards reference the new price. Full history, no data loss.
 
+![S3 data partitioning structure](docs/screenshots/s3-partition.png)
 ![dim_store_snapshot showing expired and current record](docs/screenshots/dim_store_scd_2_monday.png)
 ![dim_product_snapshot showing expired and current record](docs/screenshots/dim_pro_scd_2_monday.png)
 
@@ -647,6 +649,7 @@ STR-009 (Doyleville Wholesale, SA) changed region from **Metro → Regional** on
 | `gold.dim_store_snapshot` | 11 | 10 current + 1 expired (Monday region change) |
 | `gold.pipeline_runs` | 24 | Every run logged — including test and failed runs |
 
+![Data stored in S3 using partitionning](docs/screenshots/s3-partition.png)
 ![Row counts across all staging and gold tables after 5 days](docs/screenshots/database_row_counts.png)
 
 ---
