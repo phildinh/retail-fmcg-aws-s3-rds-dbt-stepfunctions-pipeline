@@ -13,6 +13,7 @@ Anyone can follow a tutorial and connect Lambda to RDS. What this project demons
 EventBridge triggers a Step Functions state machine every morning at 6am AEST without human intervention. After 5 consecutive daily runs (Apr 23–27), the pipeline has accumulated **2,500 fact rows** across all tables. When something goes wrong — and things did go wrong — an SNS email lands in your inbox with the exact error. No checking dashboards. No manually running scripts.
 
 ![SNS email alerts for pipeline success and failure](docs/screenshots/sns_pipeline_email_alerts.png)
+![email alerts for pipeline success and failure](docs/screenshots/email_alert.png)
 
 ### dbt tests caught real bugs before they reached the dashboard
 
